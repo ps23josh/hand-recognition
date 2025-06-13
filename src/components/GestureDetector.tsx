@@ -25,6 +25,7 @@ const GestureDetector: React.FC<GestureDetectorProps> = ({
   const [confidence, setConfidence] = useState(0)
   const [isModelLoading, setIsModelLoading] = useState(false)
   const [modelReady, setModelReady] = useState(false)
+  const [currentLandmarks, setCurrentLandmarks] = useState<any[] | null>(null)
 
   useEffect(() => {
     initializeCamera()
@@ -110,6 +111,7 @@ const GestureDetector: React.FC<GestureDetectorProps> = ({
     }
     setCurrentGesture(null)
     setConfidence(0)
+    setCurrentLandmarks(null)
   }
 
   const performGestureDetection = async () => {
@@ -124,13 +126,14 @@ const GestureDetector: React.FC<GestureDetectorProps> = ({
           if (result && result.confidence >= (sensitivity / 100)) {
             setCurrentGesture(result.type)
             setConfidence(result.confidence)
+            setCurrentLandmarks(result.landmarks || null)
             
             onGestureDetected({
               type: result.type,
               confidence: result.confidence,
               coordinates: result.landmarks ? {
-                // Don't mirror coordinates - use original MediaPipe coordinates
-                x: result.landmarks[9]?.x * 640 || 320,
+                // Mirror coordinates to match video display
+                x: (1 - result.landmarks[9]?.x) * 640 || 320,
                 y: result.landmarks[9]?.y * 480 || 240
               } : { x: 320, y: 240 }
             })
@@ -144,12 +147,91 @@ const GestureDetector: React.FC<GestureDetectorProps> = ({
             // Gradually fade out if no gesture detected
             setCurrentGesture(null)
             setConfidence(0)
+            setCurrentLandmarks(null)
           }
         }
       )
     } catch (error) {
       console.error('Gesture detection error:', error)
     }
+  }
+
+  // Hand landmark connections for drawing skeleton
+  const HAND_CONNECTIONS = [
+    // Thumb
+    [0, 1], [1, 2], [2, 3], [3, 4],
+    // Index finger
+    [0, 5], [5, 6], [6, 7], [7, 8],
+    // Middle finger
+    [0, 9], [9, 10], [10, 11], [11, 12],
+    // Ring finger
+    [0, 13], [13, 14], [14, 15], [15, 16],
+    // Pinky
+    [0, 17], [17, 18], [18, 19], [19, 20],
+    // Palm connections
+    [5, 9], [9, 13], [13, 17]
+  ]
+
+  const drawHandLandmarks = (ctx: CanvasRenderingContext2D, landmarks: any[], width: number, height: number) => {
+    // Draw connections (skeleton)
+    ctx.strokeStyle = '#00ff88'
+    ctx.lineWidth = 2
+    ctx.lineCap = 'round'
+    
+    HAND_CONNECTIONS.forEach(([start, end]) => {
+      const startPoint = landmarks[start]
+      const endPoint = landmarks[end]
+      
+      if (startPoint && endPoint) {
+        ctx.beginPath()
+        // Mirror the x coordinates to match the flipped video
+        ctx.moveTo((1 - startPoint.x) * width, startPoint.y * height)
+        ctx.lineTo((1 - endPoint.x) * width, endPoint.y * height)
+        ctx.stroke()
+      }
+    })
+
+    // Draw landmark points
+    landmarks.forEach((landmark, index) => {
+      // Mirror the x coordinate to match the flipped video
+      const x = (1 - landmark.x) * width
+      const y = landmark.y * height
+      
+      // Different colors for different parts of the hand
+      if (index === 0) {
+        // Wrist - larger, different color
+        ctx.fillStyle = '#ff6b6b'
+        ctx.beginPath()
+        ctx.arc(x, y, 6, 0, 2 * Math.PI)
+        ctx.fill()
+      } else if ([4, 8, 12, 16, 20].includes(index)) {
+        // Fingertips - bright color
+        ctx.fillStyle = '#4ecdc4'
+        ctx.beginPath()
+        ctx.arc(x, y, 5, 0, 2 * Math.PI)
+        ctx.fill()
+      } else if ([3, 7, 11, 15, 19].includes(index)) {
+        // Finger joints - medium color
+        ctx.fillStyle = '#45b7d1'
+        ctx.beginPath()
+        ctx.arc(x, y, 4, 0, 2 * Math.PI)
+        ctx.fill()
+      } else {
+        // Other joints - standard color
+        ctx.fillStyle = '#96ceb4'
+        ctx.beginPath()
+        ctx.arc(x, y, 3, 0, 2 * Math.PI)
+        ctx.fill()
+      }
+      
+      // Add landmark numbers for debugging (optional)
+      if (index % 4 === 0) { // Show numbers for key landmarks only
+        ctx.fillStyle = 'white'
+        ctx.font = '10px Arial'
+        ctx.textAlign = 'center'
+        ctx.fillText(index.toString(), x, y - 8)
+      }
+    })
   }
 
   const drawDetectionOverlay = () => {
@@ -166,11 +248,15 @@ const GestureDetector: React.FC<GestureDetectorProps> = ({
 
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
+    // Draw hand landmarks if available
+    if (currentLandmarks && isDetecting) {
+      drawHandLandmarks(ctx, currentLandmarks, canvas.width, canvas.height)
+    }
+
     if (currentGesture && isDetecting) {
       // Save context for text rendering
       ctx.save()
       
-      // Don't flip the canvas context - render normally
       const boxWidth = 200
       const boxHeight = 150
       const x = (canvas.width - boxWidth) / 2
@@ -214,14 +300,26 @@ const GestureDetector: React.FC<GestureDetectorProps> = ({
       ctx.fillText('MediaPipe Active', 15, 28)
       ctx.restore()
     }
+
+    // Draw landmark count indicator
+    if (currentLandmarks && isDetecting) {
+      ctx.save()
+      ctx.fillStyle = 'rgba(78, 205, 196, 0.8)'
+      ctx.fillRect(10, 50, 140, 30)
+      ctx.fillStyle = 'white'
+      ctx.font = '12px Inter, sans-serif'
+      ctx.textAlign = 'left'
+      ctx.fillText(`${currentLandmarks.length} Landmarks`, 15, 68)
+      ctx.restore()
+    }
   }
 
   useEffect(() => {
-    if (isDetecting || currentGesture) {
+    if (isDetecting || currentGesture || currentLandmarks) {
       const interval = setInterval(drawDetectionOverlay, 50)
       return () => clearInterval(interval)
     }
-  }, [currentGesture, confidence, isDetecting, modelReady])
+  }, [currentGesture, confidence, isDetecting, modelReady, currentLandmarks])
 
   const getGestureEmoji = (gesture: string) => {
     const emojiMap: { [key: string]: string } = {
@@ -300,7 +398,7 @@ const GestureDetector: React.FC<GestureDetectorProps> = ({
             />
             <canvas
               ref={canvasRef}
-              className="absolute inset-0 w-full h-full" // Don't mirror the canvas overlay
+              className="absolute inset-0 w-full h-full" // Canvas overlay matches the mirrored video
             />
             
             {(!hasCamera || isModelLoading) && (
@@ -334,6 +432,7 @@ const GestureDetector: React.FC<GestureDetectorProps> = ({
               </p>
               <p className="text-gray-300 text-sm">
                 Confidence: {(confidence * 100).toFixed(1)}% • MediaPipe
+                {currentLandmarks && ` • ${currentLandmarks.length} landmarks`}
               </p>
             </div>
             <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center">
@@ -353,6 +452,10 @@ const GestureDetector: React.FC<GestureDetectorProps> = ({
           </div>
         </div>
       )}
+
+      <div className="mt-4 text-xs text-gray-400">
+        <p>🟢 Wrist • 🔵 Fingertips • 🟦 Joints • 🟩 Connections</p>
+      </div>
     </div>
   )
 }
