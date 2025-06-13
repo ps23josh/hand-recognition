@@ -114,7 +114,7 @@ export class GestureRecognizer {
         z: landmark.z
       }))
 
-      // Classify gesture based on landmarks
+      // Classify gesture based on landmarks - adjusted for palm-facing detection
       const gestureType = this.classifyGesture(handLandmarks, handedness)
       
       if (gestureType !== 'unknown') {
@@ -151,13 +151,13 @@ export class GestureRecognizer {
     const fingerPips = [3, 6, 10, 14, 18] // PIP joints
     const fingerMcps = [2, 5, 9, 13, 17] // MCP joints
 
-    // Check which fingers are extended
+    // Check which fingers are extended - adjusted for palm-facing detection
     const fingersUp = this.getFingersUp(landmarks, fingerTips, fingerPips, fingerMcps, handedness)
     
     // Classify based on finger positions
     const fingerCount = fingersUp.reduce((sum, finger) => sum + finger, 0)
     
-    // Gesture classification logic
+    // Enhanced gesture classification logic for palm-facing detection
     if (fingerCount === 0) {
       return 'fist'
     } else if (fingerCount === 5) {
@@ -165,12 +165,16 @@ export class GestureRecognizer {
     } else if (fingersUp[1] === 1 && fingerCount === 1) {
       return 'pointing'
     } else if (fingersUp[0] === 1 && fingerCount === 1) {
-      return 'thumbs_up'
+      // Check if thumb is actually pointing up (not just extended)
+      if (this.isThumbsUp(landmarks, handedness)) {
+        return 'thumbs_up'
+      }
     } else if (fingersUp[1] === 1 && fingersUp[2] === 1 && fingerCount === 2) {
       return 'peace'
     } else if (fingersUp[0] === 1 && fingersUp[1] === 1 && this.isOkGesture(landmarks)) {
       return 'ok_sign'
-    } else if (fingersUp[1] === 1 && fingersUp[2] === 1 && fingersUp[4] === 1 && fingerCount === 3) {
+    } else if (fingersUp[1] === 1 && fingersUp[4] === 1 && fingerCount === 2) {
+      // Index and pinky up (rock on gesture)
       return 'rock_on'
     }
     
@@ -186,19 +190,47 @@ export class GestureRecognizer {
   ): number[] {
     const fingers = []
     
-    // Thumb (special case due to different orientation)
+    // Thumb detection - improved for palm-facing orientation
+    const thumbTip = landmarks[tips[0]]
+    const thumbIp = landmarks[pips[0]]
+    const thumbMcp = landmarks[mcps[0]]
+    
+    // For palm-facing camera, check thumb extension differently
     if (handedness === 'Right') {
-      fingers.push(landmarks[tips[0]].x > landmarks[pips[0]].x ? 1 : 0)
+      // Right hand: thumb up when tip is to the right of IP joint
+      fingers.push(thumbTip.x > thumbIp.x ? 1 : 0)
     } else {
-      fingers.push(landmarks[tips[0]].x < landmarks[pips[0]].x ? 1 : 0)
+      // Left hand: thumb up when tip is to the left of IP joint
+      fingers.push(thumbTip.x < thumbIp.x ? 1 : 0)
     }
     
-    // Other fingers
+    // Other fingers - check if tip is above PIP joint (palm facing camera)
     for (let i = 1; i < 5; i++) {
-      fingers.push(landmarks[tips[i]].y < landmarks[pips[i]].y ? 1 : 0)
+      const tipY = landmarks[tips[i]].y
+      const pipY = landmarks[pips[i]].y
+      const mcpY = landmarks[mcps[i]].y
+      
+      // Finger is up if tip is significantly above PIP and PIP is above MCP
+      const fingerUp = tipY < pipY && pipY < mcpY ? 1 : 0
+      fingers.push(fingerUp)
     }
     
     return fingers
+  }
+
+  private isThumbsUp(landmarks: HandLandmark[], handedness: string): boolean {
+    const thumbTip = landmarks[4]
+    const thumbMcp = landmarks[2]
+    const indexMcp = landmarks[5]
+    
+    // Check if thumb is pointing upward relative to hand base
+    const isPointingUp = thumbTip.y < thumbMcp.y && thumbTip.y < indexMcp.y
+    
+    // Check if thumb is extended away from palm
+    const thumbDistance = Math.abs(thumbTip.x - indexMcp.x)
+    const isExtended = thumbDistance > 0.05
+    
+    return isPointingUp && isExtended
   }
 
   private isOkGesture(landmarks: HandLandmark[]): boolean {
@@ -211,23 +243,39 @@ export class GestureRecognizer {
       Math.pow(thumbTip.y - indexTip.y, 2)
     )
     
-    return distance < 0.05 // Threshold for OK gesture
+    // Also check if middle, ring, and pinky are extended
+    const middleUp = landmarks[12].y < landmarks[10].y
+    const ringUp = landmarks[16].y < landmarks[14].y
+    const pinkyUp = landmarks[20].y < landmarks[18].y
+    
+    return distance < 0.05 && (middleUp || ringUp || pinkyUp)
   }
 
   private calculateConfidence(landmarks: HandLandmark[]): number {
-    // Simple confidence calculation based on landmark stability
-    let totalVariance = 0
+    // Enhanced confidence calculation
+    let stabilityScore = 0
+    let visibilityScore = 0
     
+    // Check landmark stability (less jitter = higher confidence)
     for (const landmark of landmarks) {
-      // Calculate variance from expected positions (simplified)
-      const variance = Math.abs(landmark.z || 0)
-      totalVariance += variance
+      const z = landmark.z || 0
+      if (Math.abs(z) < 0.1) {
+        stabilityScore += 1
+      }
+      
+      // Check if landmark is well within frame
+      if (landmark.x > 0.1 && landmark.x < 0.9 && landmark.y > 0.1 && landmark.y < 0.9) {
+        visibilityScore += 1
+      }
     }
     
-    const avgVariance = totalVariance / landmarks.length
-    const confidence = Math.max(0.5, Math.min(0.95, 1 - avgVariance * 10))
+    const stabilityRatio = stabilityScore / landmarks.length
+    const visibilityRatio = visibilityScore / landmarks.length
     
-    return confidence
+    // Combine scores for final confidence
+    const confidence = (stabilityRatio * 0.6 + visibilityRatio * 0.4)
+    
+    return Math.max(0.5, Math.min(0.95, confidence))
   }
 
   private getMostFrequentGesture(): string | null {

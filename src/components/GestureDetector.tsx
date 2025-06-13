@@ -129,7 +129,8 @@ const GestureDetector: React.FC<GestureDetectorProps> = ({
               type: result.type,
               confidence: result.confidence,
               coordinates: result.landmarks ? {
-                x: result.landmarks[9]?.x * 640 || 320, // Middle finger MCP joint or center
+                // Don't mirror coordinates - use original MediaPipe coordinates
+                x: result.landmarks[9]?.x * 640 || 320,
                 y: result.landmarks[9]?.y * 480 || 240
               } : { x: 320, y: 240 }
             })
@@ -166,7 +167,10 @@ const GestureDetector: React.FC<GestureDetectorProps> = ({
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
     if (currentGesture && isDetecting) {
-      // Draw detection box
+      // Save context for text rendering
+      ctx.save()
+      
+      // Don't flip the canvas context - render normally
       const boxWidth = 200
       const boxHeight = 150
       const x = (canvas.width - boxWidth) / 2
@@ -176,10 +180,11 @@ const GestureDetector: React.FC<GestureDetectorProps> = ({
       ctx.lineWidth = 3
       ctx.strokeRect(x, y, boxWidth, boxHeight)
 
-      // Draw gesture label
+      // Draw gesture label background
       ctx.fillStyle = 'rgba(0, 0, 0, 0.8)'
       ctx.fillRect(x, y - 40, boxWidth, 40)
       
+      // Draw text normally (not mirrored)
       ctx.fillStyle = 'white'
       ctx.font = '16px Inter, sans-serif'
       ctx.textAlign = 'center'
@@ -194,16 +199,20 @@ const GestureDetector: React.FC<GestureDetectorProps> = ({
         x + boxWidth / 2,
         y - 5
       )
+      
+      ctx.restore()
     }
 
     // Draw MediaPipe status indicator
     if (modelReady && isDetecting) {
+      ctx.save()
       ctx.fillStyle = 'rgba(16, 185, 129, 0.8)'
       ctx.fillRect(10, 10, 120, 30)
       ctx.fillStyle = 'white'
       ctx.font = '12px Inter, sans-serif'
       ctx.textAlign = 'left'
       ctx.fillText('MediaPipe Active', 15, 28)
+      ctx.restore()
     }
   }
 
@@ -287,11 +296,11 @@ const GestureDetector: React.FC<GestureDetectorProps> = ({
               autoPlay
               playsInline
               muted
-              className="w-full h-full object-cover scale-x-[-1]" // Mirror the video
+              className="w-full h-full object-cover scale-x-[-1]" // Mirror the video for natural interaction
             />
             <canvas
               ref={canvasRef}
-              className="absolute inset-0 w-full h-full scale-x-[-1]" // Mirror the overlay
+              className="absolute inset-0 w-full h-full" // Don't mirror the canvas overlay
             />
             
             {(!hasCamera || isModelLoading) && (
